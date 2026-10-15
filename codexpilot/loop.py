@@ -1,11 +1,26 @@
 """Agentic loop: call the model, run requested tools, repeat until it answers."""  # Docstring: this module's job.
 
+import subprocess  # Needed to recognize the timeout error raised by run_shell. 
+
 from codexpilot.llm import call_llm  # Our function that talks to the model.
-from codexpilot.tools.files import read_file, READ_FILE_SCHEMA  # The tool function and its description.
+from codexpilot.tools.files import (  # Imports every file tool and its schema from the tools package.
+    read_file, READ_FILE_SCHEMA,  # The reading tool and its description.
+    list_files, LIST_FILES_SCHEMA,  # The listing tool and its description.
+    edit_file, EDIT_FILE_SCHEMA,  # The writing tool and its description.
+)  # Closes the grouped import.
 
-TOOL_SCHEMAS = [READ_FILE_SCHEMA]  # The catalog of tool descriptions sent to the model.
+from codexpilot.tools.git import git_status, GIT_STATUS_SCHEMA  # Imports the git tool and its description.
+from codexpilot.safety import guarded_run_shell  # Imports run_shell WRAPPED in its three safety layers.
+from codexpilot.tools.shell import RUN_SHELL_SCHEMA  # Imports the tool's description for the catalog.
 
-TOOLS_BY_NAME = {"read_file": read_file}  # Maps a tool's name to its Python function, so we can find it when asked.
+TOOL_SCHEMAS = [READ_FILE_SCHEMA, LIST_FILES_SCHEMA, EDIT_FILE_SCHEMA, GIT_STATUS_SCHEMA, RUN_SHELL_SCHEMA]  # The catalog sent to the model: four tools now."git_status":  git_status,  # The model says "git_status" -> we run git_status().
+TOOLS_BY_NAME = {  # Maps each tool's name to its Python function: the orchestrator's routing table.
+    "read_file": read_file,  # The model says "read_file" -> we run read_file().
+    "list_files": list_files,  # The model says "list_files" -> we run list_files().
+    "edit_file": edit_file,  # The model says "edit_file" -> we run edit_file().
+    "git_status": git_status,  # The model says "git_status" -> we run git_status().
+    "run_shell": guarded_run_shell,  # The model says "run_shell" -> it gets the GUARDED version, never the raw one.
+}  # Closes the routing table.
 
 MAX_STEPS = 10  # Safety cap: maximum model calls per user message, so the loop can never run forever.
 
@@ -23,6 +38,8 @@ def run_tool(name: str, args: dict) -> tuple[str, bool]:  # Runs one tool safely
         return f"File not found: {args.get('path', '?')}", True  # ...return a clear message the model can react to.
     except PermissionError as error:  # If our security check refused the path...
         return str(error), True  # ...return the refusal message.
+    except subprocess.TimeoutExpired:  # If a shell command ran too long and was killed...
+        return "The command took too long and was stopped (timeout).", True  # ...explain it plainly so the model can adapt.
     except Exception as error:  # Any other unexpected problem (last resort)...
         return f"{type(error).__name__}: {error}", True  # ...return the error's name and message, still no crash.
 
@@ -35,7 +52,11 @@ def run_agent_turn(system_prompt: str, history: list) -> str:  # One full turn: 
         history.append({"role": "assistant", "content": response.content})  # Saves the model's reply (text or tool request) in the history.
 
         if response.stop_reason != "tool_use":  # If the model did NOT ask for a tool...
-            return response.content[0].text  # ...its reply is the final answer: return the text, the turn is over.
+                        return "".join(  # ...its reply is the final answer: glue together every TEXT block it contains.
+                block.text  # Takes the text of a block...
+                for block in response.content  # ...looking at each block of the reply...
+                if block.type == "text"  # ...but keeping ONLY text blocks (skips thinking blocks etc.).
+            )  # Closes the join: one clean string, whatever the reply's shape.
 
         results = []  # Prepares the list of tool results to send back.
 
