@@ -193,6 +193,13 @@ python -m venv .venv
 .venv\Scripts\activate
 ```
 
+If PowerShell refuses to run the activation script with "running scripts 
+is disabled on this system", allow it for the current session only:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+```
+
 On macOS or Linux:
 
 ```bash
@@ -214,6 +221,10 @@ Copy the provided example and insert your own key:
 ```bash
 cp .env.example .env
 ```
+
+Then open `.env` — not `.env.example` — and replace the placeholder with
+your own key. `.env.example` is the public template and must never contain
+a real key; `.env` is listed in `.gitignore` and is never committed.
 
 The file contains a single line:
 
